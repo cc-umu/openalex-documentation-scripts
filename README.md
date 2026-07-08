@@ -1,9 +1,21 @@
-These scripts are part of the OpenAlex [snapshot documentation](https://docs.openalex.org/download-all-data/openalex-snapshot).
+These scripts flatten a local OpenAlex snapshot and load it into PostgreSQL. They target the current standard snapshot layout:
 
-They are intended as a starting point for flattening the snapshot and loading it into a relational database. We try 
-to keep these up to date with the latest snapshot, but we can't guarantee it. 
+    openalex-snapshot/data/jsonl/{entity}/updated_date=*/part_*.gz
 
-We will happily accept pull requests if you are feeling generous!
+Typical validation run:
 
-Please feel free to contact us via our 
-[help form](https://openalex.org/help).
+    python3 flatten-openalex-jsonl.py --entities works,authors --limit 1000 --output-dir /tmp/openalex-csv-sample
+
+Full run from the repository root:
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --snapshot-dir openalex-snapshot --output-dir csv-files
+
+Load order in PostgreSQL:
+
+    psql -f openalex-documentation-scripts/openalex-pg-schema.sql
+    psql -f openalex-documentation-scripts/copy-openalex-csv.sql
+    psql -f openalex-documentation-scripts/create-openalex-indexes.sql
+
+`openalex-pg-schema.sql`, `copy-openalex-csv.sql`, and `create-openalex-indexes.sql` are generated from the table specs in `flatten-openalex-jsonl.py`:
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --write-sql --output-dir csv-files
