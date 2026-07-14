@@ -12,10 +12,11 @@ Full run from the repository root:
 
 Load order in PostgreSQL:
 
-    psql -f openalex-documentation-scripts/openalex-pg-schema.sql
-    psql -f openalex-documentation-scripts/copy-openalex-csv.sql
-    psql -f openalex-documentation-scripts/create-openalex-indexes.sql
+    createdb -U postgres openalex
+    psql -U postgres -d openalex -f openalex-documentation-scripts/openalex-pg-schema.sql
+    psql -U postgres -d openalex -v csv_dir=csv-files -f openalex-documentation-scripts/copy-openalex-csv.sql
+    psql -U postgres -d openalex -f openalex-documentation-scripts/create-openalex-indexes.sql
 
 `openalex-pg-schema.sql`, `copy-openalex-csv.sql`, and `create-openalex-indexes.sql` are generated from the table specs in `flatten-openalex-jsonl.py`:
 
-    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --write-sql --output-dir csv-files
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --write-sql

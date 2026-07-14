@@ -568,7 +568,7 @@ CREATE TABLE openalex.languages (
     id text,
     display_name text,
     works_count integer,
-    cited_by_count integer,
+    cited_by_count bigint,
     works_api_url text,
     created_date timestamp without time zone,
     updated_date timestamp without time zone
@@ -657,7 +657,7 @@ CREATE TABLE openalex.source_types (
     id text,
     display_name text,
     works_count integer,
-    cited_by_count integer,
+    cited_by_count bigint,
     works_api_url text,
     created_date timestamp without time zone,
     updated_date timestamp without time zone
@@ -848,7 +848,7 @@ CREATE TABLE openalex.work_types (
     display_name text,
     description text,
     works_count integer,
-    cited_by_count integer,
+    cited_by_count bigint,
     works_api_url text,
     created_date timestamp without time zone,
     updated_date timestamp without time zone
