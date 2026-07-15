@@ -2,21 +2,52 @@ These scripts flatten a local OpenAlex snapshot and load it into PostgreSQL. The
 
     openalex-snapshot/data/jsonl/{entity}/updated_date=*/part_*.gz
 
-Typical validation run:
+Profiles
 
-    python3 flatten-openalex-jsonl.py --entities works,authors --limit 1000 --output-dir /tmp/openalex-csv-sample
+The flattener supports three profiles:
 
-Full run from the repository root:
+    --profile core
+        Smaller analytical subset intended for a PostgreSQL load on a single machine. It drops the largest optional works tables, removes `abstract_inverted_index`, and avoids repeated descriptive fields that can be joined from dimension tables.
 
-    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --snapshot-dir openalex-snapshot --output-dir csv-files
+    --profile extended
+        Broad table coverage with some repeated/large columns removed.
 
-Load order in PostgreSQL:
+    --profile full
+        Exhaustive export matching the original generated schema. This can be very large.
 
-    createdb -U postgres openalex
-    psql -U postgres -d openalex -f openalex-documentation-scripts/openalex-pg-schema.sql
-    psql -U postgres -d openalex -v csv_dir=csv-files -f openalex-documentation-scripts/copy-openalex-csv.sql
-    psql -U postgres -d openalex -f openalex-documentation-scripts/create-openalex-indexes.sql
+ID modes
 
-`openalex-pg-schema.sql`, `copy-openalex-csv.sql`, and `create-openalex-indexes.sql` are generated from the table specs in `flatten-openalex-jsonl.py`:
+    --id-mode full
+        Preserve full OpenAlex URL IDs in all ID columns.
+
+    --id-mode numeric
+        Add numeric keys on entity tables and use numeric `*_key` columns for OpenAlex entity references in generated tables. Dimension tables still keep the full OpenAlex `id`/`openalex` values for traceability.
+
+Recommended validation run
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --snapshot-dir /externalDB/openalex-snapshot --output-dir /tmp/openalex-core-sample --entities works,authors,institutions,sources,topics --profile core --id-mode numeric --limit 10000
+
+Recommended full core flattening run
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --snapshot-dir /externalDB/openalex-snapshot --output-dir /externalDB/csv-files-core-numeric --profile core --id-mode numeric
+
+Core PostgreSQL load order
+
+Create or use a database/tablespace on the large disk, not the root filesystem. Then load tables before indexes:
+
+    createdb -U postgres openalex_core
+    psql -U postgres -d openalex_core -f openalex-documentation-scripts/openalex-pg-schema-core-numeric.sql
+    psql -U postgres -d openalex_core -v csv_dir=/externalDB/csv-files-core-numeric -f openalex-documentation-scripts/copy-openalex-csv-core-numeric.sql
+    psql -U postgres -d openalex_core -f openalex-documentation-scripts/create-openalex-indexes-core-numeric.sql
+
+Original exhaustive run
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --snapshot-dir openalex-snapshot --output-dir csv-files --profile full --id-mode full
+
+The original SQL files are generated from the full/full profile:
 
     python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --write-sql
+
+Profile-specific SQL files can be generated with the same options used for flattening:
+
+    python3 openalex-documentation-scripts/flatten-openalex-jsonl.py --profile core --id-mode numeric --write-sql

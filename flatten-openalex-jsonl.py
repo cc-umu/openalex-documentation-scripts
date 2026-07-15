@@ -18,6 +18,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -29,6 +30,11 @@ from typing import Any
 DEFAULT_SNAPSHOT_DIR = "openalex-snapshot"
 DEFAULT_CSV_DIR = "csv-files"
 DEFAULT_PROGRESS_INTERVAL = 100_000
+DEFAULT_PROFILE = "full"
+DEFAULT_ID_MODE = "full"
+
+PROFILE_CHOICES = ("core", "extended", "full")
+ID_MODE_CHOICES = ("full", "numeric")
 
 CURRENT_ENTITIES = [
     "authors", "awards", "concepts", "continents", "countries", "domains",
@@ -217,6 +223,237 @@ ENTITY_TABLES = {
 }
 
 
+
+CORE_ENTITY_TABLES = {
+    "authors": ["authors", "authors_ids", "authors_last_known_institutions"],
+    "awards": ["awards", "awards_funded_outputs"],
+    "concepts": ["concepts", "concepts_ids"],
+    "continents": ["continents", "continents_countries"],
+    "countries": ["countries"],
+    "domains": ["domains", "domains_ids", "domains_fields", "domains_siblings"],
+    "fields": ["fields", "fields_ids", "fields_subfields", "fields_siblings"],
+    "funders": ["funders", "funders_ids", "funders_counts_by_year", "funders_roles"],
+    "institution-types": ["institution_types"],
+    "institutions": ["institutions", "institutions_ids", "institutions_geo", "institutions_associated_institutions", "institutions_counts_by_year", "institutions_roles", "institutions_repositories", "institutions_topics", "institutions_topic_share"],
+    "keywords": ["keywords"],
+    "languages": ["languages"],
+    "licenses": ["licenses"],
+    "publishers": ["publishers", "publishers_ids", "publishers_counts_by_year", "publishers_roles"],
+    "sdgs": ["sdgs"],
+    "source-types": ["source_types"],
+    "sources": ["sources", "sources_ids", "sources_counts_by_year", "sources_apc_prices", "sources_topics", "sources_topic_share"],
+    "subfields": ["subfields", "subfields_ids", "subfields_topics", "subfields_siblings"],
+    "topics": ["topics", "topics_ids", "topics_keywords", "topics_siblings"],
+    "work-types": ["work_types"],
+    "works": [
+        "works", "works_ids", "works_indexed_in",
+        "works_corresponding_author_ids", "works_corresponding_institution_ids",
+        "works_primary_locations", "works_locations", "works_best_oa_locations",
+        "works_authorships", "works_authorship_institutions",
+        "works_authorship_countries", "works_biblio", "works_topics",
+        "works_funders", "works_institutions", "works_open_access",
+        "works_counts_by_year", "works_citation_normalized_percentile",
+        "works_cited_by_percentile_year", "works_apc_list", "works_apc_paid",
+    ],
+}
+
+LOCATION_CORE_COLUMNS = [
+    "work_id", "location_position", "location_id", "source_id",
+    "is_oa", "is_published", "is_accepted", "landing_page_url", "pdf_url",
+    "license", "license_id", "version",
+]
+
+CORE_COLUMN_KEEP = {
+    "works": [
+        "id", "doi", "title", "publication_year", "publication_date", "language", "type",
+        "authors_count", "cited_by_count", "referenced_works_count", "locations_count",
+        "countries_distinct_count", "institutions_distinct_count", "fwci",
+        "is_retracted", "is_paratext", "is_xpac", "has_fulltext",
+        "has_content_pdf", "has_content_grobid_xml", "primary_topic_id",
+        "primary_topic_score", "primary_topic_subfield_id", "primary_topic_field_id",
+        "primary_topic_domain_id", "created_date", "updated_date",
+    ],
+    "works_primary_locations": LOCATION_CORE_COLUMNS,
+    "works_locations": LOCATION_CORE_COLUMNS,
+    "works_best_oa_locations": LOCATION_CORE_COLUMNS,
+    "works_authorships": [
+        "work_id", "authorship_position", "author_position", "author_id",
+        "author_display_name", "raw_author_name", "is_corresponding",
+    ],
+    "works_authorship_institutions": [
+        "work_id", "authorship_position", "institution_position", "author_id",
+        "institution_id", "institution_country_code",
+    ],
+    "works_authorship_countries": ["work_id", "authorship_position", "country_position", "country_code"],
+    "works_topics": ["work_id", "topic_position", "topic_id", "score"],
+    "works_funders": ["work_id", "funder_position", "funder_id"],
+    "works_institutions": ["work_id", "institution_position", "institution_id", "institution_country_code"],
+    "authors_last_known_institutions": [
+        "author_id", "institution_position", "institution_id", "institution_country_code",
+    ],
+}
+
+CORE_COLUMN_DROP = {
+    "authors": {"display_name_alternatives", "raw_author_names", "works_api_url"},
+    "awards": {"description", "landing_page_url", "provenance", "works_api_url"},
+    "concepts": {"description", "image_url", "image_thumbnail_url", "international", "works_api_url"},
+    "funders": {"description", "homepage_url", "image_url", "image_thumbnail_url", "alternate_titles"},
+    "institutions": {"homepage_url", "image_url", "image_thumbnail_url", "display_name_acronyms", "display_name_alternatives", "lineage", "works_api_url"},
+    "publishers": {"alternate_titles", "country_codes", "lineage", "homepage_url", "image_url", "image_thumbnail_url", "sources_api_url"},
+    "sources": {"alternate_titles", "host_organization_lineage", "homepage_url", "works_api_url"},
+    "topics": {"description", "keywords", "works_api_url"},
+}
+
+COMPACT_COLUMN_DROP = {
+    "works": {"display_name", "abstract_inverted_index", "primary_topic_display_name", "primary_topic_subfield_display_name", "primary_topic_field_display_name", "primary_topic_domain_display_name"},
+    "works_primary_locations": {"source_display_name", "source_issn_l", "source_issn", "source_is_oa", "source_is_in_doaj", "source_is_core", "source_host_organization", "source_host_organization_name", "source_host_organization_lineage", "source_host_organization_lineage_names", "source_type", "raw_source_name", "raw_type", "provenance"},
+    "works_locations": {"source_display_name", "source_issn_l", "source_issn", "source_is_oa", "source_is_in_doaj", "source_is_core", "source_host_organization", "source_host_organization_name", "source_host_organization_lineage", "source_host_organization_lineage_names", "source_type", "raw_source_name", "raw_type", "provenance"},
+    "works_best_oa_locations": {"source_display_name", "source_issn_l", "source_issn", "source_is_oa", "source_is_in_doaj", "source_is_core", "source_host_organization", "source_host_organization_name", "source_host_organization_lineage", "source_host_organization_lineage_names", "source_type", "raw_source_name", "raw_type", "provenance"},
+    "works_authorships": {"author_orcid", "raw_orcid", "countries"},
+    "works_authorship_institutions": {"institution_ror", "institution_display_name", "institution_type", "institution_lineage"},
+    "works_authorship_affiliations": {"raw_affiliation"},
+    "works_topics": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "works_keywords": {"display_name"},
+    "works_concepts": {"wikidata", "display_name"},
+    "works_sustainable_development_goals": {"display_name"},
+    "works_awards": {"display_name", "funder_display_name"},
+    "works_funders": {"display_name", "ror"},
+    "works_institutions": {"institution_ror", "institution_display_name", "institution_type", "institution_lineage"},
+    "authors_sources": {"display_name", "issn", "host_organization_name", "host_organization_lineage", "host_organization_lineage_names"},
+    "authors_topics": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "authors_topic_share": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "institutions_topics": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "institutions_topic_share": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "sources_topics": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+    "sources_topic_share": {"display_name", "subfield_display_name", "field_display_name", "domain_display_name"},
+}
+
+ID_COLUMN_TO_KEY = {
+    "work_id": "work_key",
+    "referenced_work_id": "referenced_work_key",
+    "related_work_id": "related_work_key",
+    "author_id": "author_key",
+    "institution_id": "institution_key",
+    "associated_institution_id": "associated_institution_key",
+    "source_id": "source_key",
+    "publisher_id": "publisher_key",
+    "funder_id": "funder_key",
+    "concept_id": "concept_key",
+    "ancestor_id": "ancestor_key",
+    "related_concept_id": "related_concept_key",
+    "topic_id": "topic_key",
+    "primary_topic_id": "primary_topic_key",
+    "subfield_id": "subfield_key",
+    "primary_topic_subfield_id": "primary_topic_subfield_key",
+    "field_id": "field_key",
+    "primary_topic_field_id": "primary_topic_field_key",
+    "domain_id": "domain_key",
+    "primary_topic_domain_id": "primary_topic_domain_key",
+}
+
+MAIN_TABLE_KEY_COLUMNS = {
+    "works": "work_key",
+    "authors": "author_key",
+    "institutions": "institution_key",
+    "sources": "source_key",
+    "publishers": "publisher_key",
+    "funders": "funder_key",
+    "concepts": "concept_key",
+    "topics": "topic_key",
+    "subfields": "subfield_key",
+    "fields": "field_key",
+    "domains": "domain_key",
+}
+
+OPENALEX_NUMERIC_ID_RE = re.compile(r"(\d+)$")
+
+
+def entity_tables_for_profile(profile: str) -> dict[str, list[str]]:
+    if profile == "core":
+        return {entity: list(tables) for entity, tables in CORE_ENTITY_TABLES.items()}
+    return {entity: list(tables) for entity, tables in ENTITY_TABLES.items()}
+
+
+def table_names_for_profile(profile: str) -> set[str]:
+    return {table for tables in entity_tables_for_profile(profile).values() for table in tables}
+
+
+def columns_for_profile(table_name: str, profile: str) -> list[Column]:
+    columns = list(TABLES[table_name])
+    if profile == "core" and table_name in CORE_COLUMN_KEEP:
+        keep = set(CORE_COLUMN_KEEP[table_name])
+        columns = [column for column in columns if column.name in keep]
+    drops: set[str] = set()
+    if profile in {"core", "extended"}:
+        drops.update(COMPACT_COLUMN_DROP.get(table_name, set()))
+    if profile == "core":
+        drops.update(CORE_COLUMN_DROP.get(table_name, set()))
+    if drops:
+        columns = [column for column in columns if column.name not in drops]
+    return columns
+
+
+def apply_id_mode(table_name: str, columns: list[Column], id_mode: str) -> list[Column]:
+    if id_mode == "full":
+        return columns
+    converted: list[Column] = []
+    main_key = MAIN_TABLE_KEY_COLUMNS.get(table_name)
+    if main_key:
+        converted.append(c(main_key, "bigint"))
+    for column in columns:
+        key_name = ID_COLUMN_TO_KEY.get(column.name)
+        if key_name:
+            converted.append(c(key_name, "bigint"))
+        else:
+            converted.append(column)
+    deduped: list[Column] = []
+    seen: set[str] = set()
+    for column in converted:
+        if column.name in seen:
+            continue
+        deduped.append(column)
+        seen.add(column.name)
+    return deduped
+
+
+def table_specs_for_profile(profile: str, id_mode: str) -> dict[str, list[Column]]:
+    selected = table_names_for_profile(profile)
+    return {
+        table_name: apply_id_mode(table_name, columns_for_profile(table_name, profile), id_mode)
+        for table_name in TABLES
+        if table_name in selected
+    }
+
+
+def openalex_numeric_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().rstrip("/")
+    if not text:
+        return None
+    match = OPENALEX_NUMERIC_ID_RE.search(text)
+    return match.group(1) if match else None
+
+
+def key_source_columns() -> dict[str, list[str]]:
+    sources: dict[str, list[str]] = {}
+    for id_column, key_column in ID_COLUMN_TO_KEY.items():
+        sources.setdefault(key_column, []).append(id_column)
+    for key_column in MAIN_TABLE_KEY_COLUMNS.values():
+        sources.setdefault(key_column, []).append("id")
+    return sources
+
+
+KEY_SOURCE_COLUMNS = key_source_columns()
+
+
+def derive_key(row: dict[str, Any], key_column: str) -> str | None:
+    for source_column in KEY_SOURCE_COLUMNS.get(key_column, []):
+        key = openalex_numeric_key(row.get(source_column))
+        if key is not None:
+            return key
+    return None
+
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -289,11 +526,14 @@ def topic_row(parent_column: str, parent_id: str, position: int, topic: dict[str
 
 
 class CsvSet:
-    def __init__(self, output_dir: Path, table_names: list[str]):
+    def __init__(self, output_dir: Path, table_names: list[str], table_specs: dict[str, list[Column]], id_mode: str):
         self.output_dir = output_dir
-        self.table_names = table_names
+        self.table_specs = table_specs
+        self.table_names = [table_name for table_name in table_names if table_name in table_specs]
+        self.id_mode = id_mode
         self.stack = ExitStack()
         self.writers: dict[str, csv.DictWriter] = {}
+        self.column_names = {table_name: [column.name for column in columns] for table_name, columns in table_specs.items()}
         self.row_counts: Counter[str] = Counter()
 
     def __enter__(self) -> "CsvSet":
@@ -301,7 +541,7 @@ class CsvSet:
         for table_name in self.table_names:
             path = self.output_dir / f"{table_name}.csv.gz"
             handle = self.stack.enter_context(gzip.open(path, "wt", encoding="utf-8", newline=""))
-            columns = [column.name for column in TABLES[table_name]]
+            columns = self.column_names[table_name]
             writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
             self.writers[table_name] = writer
@@ -310,19 +550,32 @@ class CsvSet:
     def __exit__(self, *exc_info: object) -> None:
         self.stack.__exit__(*exc_info)
 
+    def value_for_column(self, row: dict[str, Any], column: str) -> Any:
+        if column in row:
+            return row.get(column)
+        if self.id_mode == "numeric" and column.endswith("_key"):
+            return derive_key(row, column)
+        return None
+
     def write(self, table_name: str, row: dict[str, Any]) -> None:
-        columns = [column.name for column in TABLES[table_name]]
-        self.writers[table_name].writerow({column: clean_value(row.get(column)) for column in columns})
+        if table_name not in self.writers:
+            return
+        columns = self.column_names[table_name]
+        self.writers[table_name].writerow({column: clean_value(self.value_for_column(row, column)) for column in columns})
         self.row_counts[table_name] += 1
 
 
 class Flattener:
-    def __init__(self, snapshot_dir: Path, output_dir: Path, limit: int | None, files_per_entity: int, progress_interval: int):
+    def __init__(self, snapshot_dir: Path, output_dir: Path, limit: int | None, files_per_entity: int, progress_interval: int, profile: str, id_mode: str):
         self.snapshot_dir = snapshot_dir
         self.output_dir = output_dir
         self.limit = limit
         self.files_per_entity = files_per_entity
         self.progress_interval = progress_interval
+        self.profile = profile
+        self.id_mode = id_mode
+        self.entity_tables = entity_tables_for_profile(profile)
+        self.table_specs = table_specs_for_profile(profile, id_mode)
         self.records_read: Counter[str] = Counter()
         self.records_skipped: Counter[str] = Counter()
         self.json_errors: Counter[str] = Counter()
@@ -355,13 +608,17 @@ class Flattener:
     def flatten_entity(self, entity: str) -> None:
         if entity not in ENTITY_TABLES:
             raise ValueError(f"unsupported entity: {entity}")
+        table_names = self.entity_tables.get(entity, [])
+        if not table_names:
+            logging.info("entity=%s profile=%s skipped_no_tables", entity, self.profile)
+            return
         files = self.entity_files(entity)
         if self.files_per_entity:
             files = files[: self.files_per_entity]
-        logging.info("entity=%s files=%s", entity, len(files))
+        logging.info("entity=%s profile=%s id_mode=%s files=%s tables=%s", entity, self.profile, self.id_mode, len(files), len(table_names))
         started = time.time()
         flatten = getattr(self, f"flatten_{entity.replace('-', '_')}")
-        with CsvSet(self.output_dir, ENTITY_TABLES[entity]) as csvs:
+        with CsvSet(self.output_dir, table_names, self.table_specs, self.id_mode) as csvs:
             stop = False
             for file_number, path in enumerate(files, 1):
                 if stop:
@@ -677,9 +934,14 @@ def write_apc(csvs: CsvSet, table_name: str, work_id: str, apc_value: Any) -> No
         csvs.write(table_name, {"work_id": work_id, "value": apc.get("value"), "currency": apc.get("currency"), "value_usd": apc.get("value_usd"), "provenance": apc.get("provenance")})
 
 
-def schema_sql() -> str:
-    lines = ["-- Generated by flatten-openalex-jsonl.py --print-schema.", "CREATE SCHEMA IF NOT EXISTS openalex;", ""]
-    for table_name, columns in TABLES.items():
+def schema_sql(profile: str = DEFAULT_PROFILE, id_mode: str = DEFAULT_ID_MODE) -> str:
+    specs = table_specs_for_profile(profile, id_mode)
+    lines = [
+        f"-- Generated by flatten-openalex-jsonl.py --print-schema --profile {profile} --id-mode {id_mode}.",
+        "CREATE SCHEMA IF NOT EXISTS openalex;",
+        "",
+    ]
+    for table_name, columns in specs.items():
         lines.append(f"DROP TABLE IF EXISTS openalex.{table_name} CASCADE;")
         lines.append(f"CREATE TABLE openalex.{table_name} (")
         lines.append(",\n".join(f"    {column.name} {column.pg_type}" for column in columns))
@@ -687,9 +949,10 @@ def schema_sql() -> str:
     return "\n".join(lines)
 
 
-def copy_sql() -> str:
+def copy_sql(profile: str = DEFAULT_PROFILE, id_mode: str = DEFAULT_ID_MODE) -> str:
+    specs = table_specs_for_profile(profile, id_mode)
     lines = [
-        "-- Generated by flatten-openalex-jsonl.py --print-copy-sql.",
+        f"-- Generated by flatten-openalex-jsonl.py --print-copy-sql --profile {profile} --id-mode {id_mode}.",
         "-- Usage: psql -v csv_dir=/path/to/csv-files -f copy-openalex-csv.sql",
         "",
         "\\if :{?csv_dir}",
@@ -700,28 +963,71 @@ def copy_sql() -> str:
         "\\setenv OPENALEX_CSV_DIR :csv_dir",
         "",
     ]
-    for table_name, columns in TABLES.items():
+    for table_name, columns in specs.items():
         column_list = ", ".join(column.name for column in columns)
         lines.append(f"\\copy openalex.{table_name} ({column_list}) FROM PROGRAM 'gunzip -c \"${{OPENALEX_CSV_DIR}}/{table_name}.csv.gz\"' WITH (FORMAT csv, HEADER true)")
     lines.append("")
     return "\n".join(lines)
 
 
-def index_sql() -> str:
-    lines = ["-- Generated by flatten-openalex-jsonl.py --print-index-sql.", "-- Run after COPY for faster bulk loading.", ""]
-    indexed = {"id", "work_id", "author_id", "institution_id", "source_id", "publisher_id", "funder_id", "concept_id", "topic_id", "award_id", "domain_id", "field_id", "subfield_id", "country_id", "referenced_work_id", "related_work_id"}
-    for table_name, columns in TABLES.items():
+def indexed_columns(profile: str, id_mode: str) -> set[str]:
+    full_id_columns = {
+        "id", "work_id", "author_id", "institution_id", "source_id", "publisher_id",
+        "funder_id", "concept_id", "topic_id", "award_id", "domain_id", "field_id",
+        "subfield_id", "country_id", "referenced_work_id", "related_work_id",
+    }
+    key_columns = set(ID_COLUMN_TO_KEY.values()) | set(MAIN_TABLE_KEY_COLUMNS.values())
+    if profile == "core":
+        columns = {
+            "id", "work_id", "author_id", "institution_id", "source_id", "publisher_id",
+            "funder_id", "concept_id", "topic_id", "domain_id", "field_id", "subfield_id",
+            "publication_year", "doi", "orcid", "ror", "issn_l",
+        }
+        if id_mode == "numeric":
+            columns.update({
+                "work_key", "author_key", "institution_key", "source_key", "publisher_key",
+                "funder_key", "concept_key", "topic_key", "domain_key", "field_key",
+                "subfield_key", "primary_topic_key",
+            })
+        return columns
+    columns = set(full_id_columns)
+    if id_mode == "numeric":
+        columns.update(key_columns)
+    return columns
+
+
+def index_sql(profile: str = DEFAULT_PROFILE, id_mode: str = DEFAULT_ID_MODE) -> str:
+    specs = table_specs_for_profile(profile, id_mode)
+    lines = [
+        f"-- Generated by flatten-openalex-jsonl.py --print-index-sql --profile {profile} --id-mode {id_mode}.",
+        "-- Run after COPY for faster bulk loading.",
+        "",
+    ]
+    indexed = indexed_columns(profile, id_mode)
+    for table_name, columns in specs.items():
         for column in columns:
+            if profile == "core" and id_mode == "numeric" and column.name == "id" and table_name in {"works", "authors"}:
+                continue
             if column.name in indexed:
                 lines.append(f"CREATE INDEX IF NOT EXISTS {table_name}_{column.name}_idx ON openalex.{table_name} ({column.name});")
     lines.append("")
     return "\n".join(lines)
 
 
-def write_sql_files(sql_dir: Path) -> None:
-    (sql_dir / "openalex-pg-schema.sql").write_text(schema_sql(), encoding="utf-8")
-    (sql_dir / "copy-openalex-csv.sql").write_text(copy_sql(), encoding="utf-8")
-    (sql_dir / "create-openalex-indexes.sql").write_text(index_sql(), encoding="utf-8")
+def sql_suffix(profile: str, id_mode: str) -> str:
+    if profile == DEFAULT_PROFILE and id_mode == DEFAULT_ID_MODE:
+        return ""
+    suffix = f"-{profile}"
+    if id_mode != DEFAULT_ID_MODE:
+        suffix += f"-{id_mode}"
+    return suffix
+
+
+def write_sql_files(sql_dir: Path, profile: str = DEFAULT_PROFILE, id_mode: str = DEFAULT_ID_MODE) -> None:
+    suffix = sql_suffix(profile, id_mode)
+    (sql_dir / f"openalex-pg-schema{suffix}.sql").write_text(schema_sql(profile, id_mode), encoding="utf-8")
+    (sql_dir / f"copy-openalex-csv{suffix}.sql").write_text(copy_sql(profile, id_mode), encoding="utf-8")
+    (sql_dir / f"create-openalex-indexes{suffix}.sql").write_text(index_sql(profile, id_mode), encoding="utf-8")
 
 
 def parse_entities(raw: str) -> list[str]:
@@ -739,6 +1045,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snapshot-dir", default=DEFAULT_SNAPSHOT_DIR)
     parser.add_argument("--output-dir", default=DEFAULT_CSV_DIR)
     parser.add_argument("--entities", default="all", help="Comma-separated entity names or all.")
+    parser.add_argument("--profile", choices=PROFILE_CHOICES, default=DEFAULT_PROFILE, help="Export profile: core is a smaller analytical subset; extended is compact but broad; full preserves the exhaustive schema.")
+    parser.add_argument("--id-mode", choices=ID_MODE_CHOICES, default=DEFAULT_ID_MODE, help="Use full OpenAlex IDs, or numeric *_key columns for OpenAlex entity IDs.")
     parser.add_argument("--limit", type=int, help="Maximum records to read per entity.")
     parser.add_argument("--files-per-entity", type=int, default=int(os.environ.get("OPENALEX_DEMO_FILES_PER_ENTITY", "0")))
     parser.add_argument("--progress-interval", type=int, default=DEFAULT_PROGRESS_INTERVAL)
@@ -754,19 +1062,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.print_schema:
-        print(schema_sql())
+        print(schema_sql(args.profile, args.id_mode))
         return 0
     if args.print_copy_sql:
-        print(copy_sql())
+        print(copy_sql(args.profile, args.id_mode))
         return 0
     if args.print_index_sql:
-        print(index_sql())
+        print(index_sql(args.profile, args.id_mode))
         return 0
     if args.write_sql:
-        write_sql_files(Path(args.sql_dir))
+        write_sql_files(Path(args.sql_dir), args.profile, args.id_mode)
         return 0
     logging.basicConfig(level=getattr(logging, args.log_level.upper()), format="%(asctime)s %(levelname)s %(message)s")
-    flattener = Flattener(Path(args.snapshot_dir), Path(args.output_dir), args.limit, args.files_per_entity, args.progress_interval)
+    flattener = Flattener(Path(args.snapshot_dir), Path(args.output_dir), args.limit, args.files_per_entity, args.progress_interval, args.profile, args.id_mode)
     flattener.run(parse_entities(args.entities))
     return 0
 
